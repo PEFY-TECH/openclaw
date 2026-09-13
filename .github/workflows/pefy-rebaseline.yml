@@ -1,0 +1,61 @@
+name: PEFY Sovereign Rebaseline
+
+on:
+  pull_request:
+    paths:
+      - "scripts/pefy-runtime-rebaseline.sh"
+      - "docs/PEFY_RUNTIME_QUALIFICATION.md"
+      - ".github/workflows/pefy-rebaseline.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/pefy-runtime-rebaseline.sh"
+      - "docs/PEFY_RUNTIME_QUALIFICATION.md"
+      - ".github/workflows/pefy-rebaseline.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  governance-rebaseline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PEFY candidate with history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate rebaseline script syntax
+        run: bash -n scripts/pefy-runtime-rebaseline.sh
+
+      - name: Measure canonical upstream drift without syncing
+        env:
+          PEFY_REBASELINE_REPORT_ONLY: "1"
+        run: bash scripts/pefy-runtime-rebaseline.sh
+
+      - name: Assert no automatic upstream mutation occurred
+        run: |
+          test -f artifacts/pefy-openclaw-rebaseline/rebaseline.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("artifacts/pefy-openclaw-rebaseline/rebaseline.json").read_text())
+          if data.get("automatic_sync_performed") is not False:
+              raise SystemExit("Automatic upstream mutation must remain false")
+          if data.get("license", {}).get("spdx") != "MIT":
+              raise SystemExit("Expected MIT canonical license evidence")
+          print(
+              "PEFY runtime governance evidence:",
+              data["drift_class"],
+              "upstream_only=", data["upstream_only_commits"],
+          )
+          PY
+
+      - name: Upload rebaseline evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pefy-openclaw-rebaseline
+          if-no-files-found: error
+          path: artifacts/pefy-openclaw-rebaseline/**
