@@ -9,6 +9,7 @@ UPSTREAM_BRANCH="${PEFY_OPENCLAW_UPSTREAM_BRANCH:-main}"
 UPSTREAM_REF="refs/pefy/upstream/${UPSTREAM_BRANCH}"
 EXPECTED_UPSTREAM_SHA="${PEFY_EXPECTED_UPSTREAM_SHA:-}"
 EVIDENCE_DIR="${PEFY_OPENCLAW_EVIDENCE_DIR:-artifacts/pefy-openclaw-rebaseline}"
+REPORT_ONLY="${PEFY_REBASELINE_REPORT_ONLY:-0}"
 
 command -v git >/dev/null 2>&1 || fail "git is required"
 mkdir -p "$EVIDENCE_DIR"
@@ -56,9 +57,11 @@ drift_class=$DRIFT_CLASS
 pefy_license_sha256=$CURRENT_LICENSE_SHA256
 upstream_license_sha256=$UPSTREAM_LICENSE_SHA256
 upstream_license=MIT
+automatic_sync_performed=false
+report_only=$REPORT_ONLY
 EOF
 
-python3 - "$EVIDENCE_DIR/rebaseline.json" "$CURRENT_SHA" "$UPSTREAM_SHA" "$PEFY_ONLY" "$UPSTREAM_ONLY" "$DRIFT_CLASS" "$CURRENT_LICENSE_SHA256" "$UPSTREAM_LICENSE_SHA256" <<'PY'
+python3 - "$EVIDENCE_DIR/rebaseline.json" "$CURRENT_SHA" "$UPSTREAM_SHA" "$PEFY_ONLY" "$UPSTREAM_ONLY" "$DRIFT_CLASS" "$CURRENT_LICENSE_SHA256" "$UPSTREAM_LICENSE_SHA256" "$REPORT_ONLY" <<'PY'
 import datetime as dt
 import json
 import pathlib
@@ -78,6 +81,7 @@ payload = {
         "upstream_sha256": sys.argv[8],
     },
     "automatic_sync_performed": False,
+    "report_only": sys.argv[9] == "1",
 }
 out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 PY
@@ -87,6 +91,10 @@ log "License: MIT confirmed"
 log "No upstream merge/rebase/sync was performed"
 
 if [[ "$DRIFT_CLASS" == "U4" ]]; then
+  if [[ "$REPORT_ONLY" == "1" ]]; then
+    log "U4 recorded in governance report-only mode; runtime production qualification remains blocked"
+    exit 0
+  fi
   fail "U4 upstream drift requires controlled rebaseline, security review and benchmark evidence before production qualification" 4
 fi
 
