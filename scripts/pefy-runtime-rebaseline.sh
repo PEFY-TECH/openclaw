@@ -20,8 +20,19 @@ if [[ "$UPSTREAM_URL" != "$CANONICAL_UPSTREAM_URL" ]]; then
   fail "Non-canonical upstream source rejected: expected $CANONICAL_UPSTREAM_URL" 7
 fi
 
-CURRENT_SHA="$(git rev-parse HEAD)"
-log "Current PEFY OpenClaw candidate: $CURRENT_SHA"
+CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+CURRENT_SHA="${PEFY_CANDIDATE_HEAD_SHA:-$CHECKED_OUT_SHA}"
+PR_MERGE_SHA="${PEFY_PR_MERGE_SHA:-}"
+git cat-file -e "${CURRENT_SHA}^{commit}" 2>/dev/null \
+  || fail "Candidate head SHA is not available in the local Git object database: $CURRENT_SHA" 8
+
+log "PEFY OpenClaw candidate head: $CURRENT_SHA"
+if [[ "$CHECKED_OUT_SHA" != "$CURRENT_SHA" ]]; then
+  log "Checked-out SHA differs from candidate head: $CHECKED_OUT_SHA"
+fi
+if [[ -n "$PR_MERGE_SHA" ]]; then
+  log "GitHub pull-request synthetic merge SHA (provenance only): $PR_MERGE_SHA"
+fi
 log "Fetching canonical upstream branch without merging"
 git fetch --no-tags "$UPSTREAM_URL" "+refs/heads/${UPSTREAM_BRANCH}:${UPSTREAM_REF}"
 UPSTREAM_SHA="$(git rev-parse "$UPSTREAM_REF")"
@@ -31,7 +42,7 @@ if [[ -n "$EXPECTED_UPSTREAM_SHA" && "$UPSTREAM_SHA" != "$EXPECTED_UPSTREAM_SHA"
   fail "Upstream moved: expected $EXPECTED_UPSTREAM_SHA but fetched $UPSTREAM_SHA; re-review before qualification" 5
 fi
 
-read -r PEFY_ONLY UPSTREAM_ONLY < <(git rev-list --left-right --count "HEAD...${UPSTREAM_REF}")
+read -r PEFY_ONLY UPSTREAM_ONLY < <(git rev-list --left-right --count "${CURRENT_SHA}...${UPSTREAM_REF}")
 
 level_for_count() {
   local count="$1"
@@ -59,14 +70,19 @@ UPSTREAM_DRIFT_CLASS="U${UPSTREAM_LEVEL}"
 DOWNSTREAM_DIVERGENCE_CLASS="D${DOWNSTREAM_LEVEL}"
 REVIEW_CLASS="R${REVIEW_LEVEL}"
 
-LICENSE_FILE="$(mktemp)"
+PEFY_LICENSE_FILE="$(mktemp)"
+UPSTREAM_LICENSE_FILE="$(mktemp)"
+PEFY_NOTICES_FILE="$(mktemp)"
 UPSTREAM_NOTICES_FILE="$(mktemp)"
-trap 'rm -f "$LICENSE_FILE" "$UPSTREAM_NOTICES_FILE"' EXIT
-git show "${UPSTREAM_REF}:LICENSE" > "$LICENSE_FILE" || fail "Canonical upstream LICENSE could not be read" 6
-[[ -f LICENSE ]] || fail "PEFY candidate LICENSE is missing" 6
+trap 'rm -f "$PEFY_LICENSE_FILE" "$UPSTREAM_LICENSE_FILE" "$PEFY_NOTICES_FILE" "$UPSTREAM_NOTICES_FILE"' EXIT
+
+git show "${CURRENT_SHA}:LICENSE" > "$PEFY_LICENSE_FILE" \
+  || fail "PEFY candidate LICENSE could not be read from $CURRENT_SHA" 6
+git show "${UPSTREAM_REF}:LICENSE" > "$UPSTREAM_LICENSE_FILE" \
+  || fail "Canonical upstream LICENSE could not be read" 6
 
 read -r PEFY_NOTICES_DECLARED UPSTREAM_NOTICES_DECLARED < <(
-  python3 - LICENSE "$LICENSE_FILE" <<'PY'
+  python3 - "$PEFY_LICENSE_FILE" "$UPSTREAM_LICENSE_FILE" <<'PY'
 from pathlib import Path
 import sys
 
@@ -131,8 +147,9 @@ if [[ "$UPSTREAM_NOTICES_DECLARED" == "true" ]]; then
   [[ -s "$UPSTREAM_NOTICES_FILE" ]] || fail "Upstream THIRD_PARTY_NOTICES.md is empty" 6
 fi
 if [[ "$PEFY_NOTICES_DECLARED" == "true" ]]; then
-  [[ -s THIRD_PARTY_NOTICES.md ]] \
-    || fail "PEFY LICENSE references THIRD_PARTY_NOTICES.md but the file is unavailable or empty" 6
+  git show "${CURRENT_SHA}:THIRD_PARTY_NOTICES.md" > "$PEFY_NOTICES_FILE" \
+    || fail "PEFY LICENSE references THIRD_PARTY_NOTICES.md but the file is unavailable" 6
+  [[ -s "$PEFY_NOTICES_FILE" ]] || fail "PEFY THIRD_PARTY_NOTICES.md is empty" 6
 fi
 
 hash_file() {
@@ -150,12 +167,12 @@ print(h.hexdigest())
 PY
 }
 
-CURRENT_LICENSE_SHA256="$(hash_file LICENSE)"
-UPSTREAM_LICENSE_SHA256="$(hash_file "$LICENSE_FILE")"
+CURRENT_LICENSE_SHA256="$(hash_file "$PEFY_LICENSE_FILE")"
+UPSTREAM_LICENSE_SHA256="$(hash_file "$UPSTREAM_LICENSE_FILE")"
 PEFY_NOTICES_SHA256=""
 UPSTREAM_NOTICES_SHA256=""
 if [[ "$PEFY_NOTICES_DECLARED" == "true" ]]; then
-  PEFY_NOTICES_SHA256="$(hash_file THIRD_PARTY_NOTICES.md)"
+  PEFY_NOTICES_SHA256="$(hash_file "$PEFY_NOTICES_FILE")"
 fi
 if [[ "$UPSTREAM_NOTICES_DECLARED" == "true" ]]; then
   UPSTREAM_NOTICES_SHA256="$(hash_file "$UPSTREAM_NOTICES_FILE")"
@@ -169,6 +186,9 @@ fi
 
 cat > "$EVIDENCE_DIR/rebaseline.env" <<EOF
 pefy_candidate_sha=$CURRENT_SHA
+pefy_candidate_head_sha=$CURRENT_SHA
+checked_out_sha=$CHECKED_OUT_SHA
+pull_request_merge_sha=$PR_MERGE_SHA
 canonical_upstream_url=$CANONICAL_UPSTREAM_URL
 canonical_source_verified=true
 upstream_sha=$UPSTREAM_SHA
@@ -192,7 +212,7 @@ report_only=$REPORT_ONLY
 evidence_mode=$EVIDENCE_MODE
 EOF
 
-python3 - "$EVIDENCE_DIR/rebaseline.json" "$CURRENT_SHA" "$CANONICAL_UPSTREAM_URL" "$UPSTREAM_SHA" "$PEFY_ONLY" "$UPSTREAM_ONLY" "$UPSTREAM_DRIFT_CLASS" "$DOWNSTREAM_DIVERGENCE_CLASS" "$REVIEW_CLASS" "$CURRENT_LICENSE_SHA256" "$UPSTREAM_LICENSE_SHA256" "$PEFY_NOTICES_DECLARED" "$UPSTREAM_NOTICES_DECLARED" "$PEFY_NOTICES_SHA256" "$UPSTREAM_NOTICES_SHA256" "$REPORT_ONLY" "$EVIDENCE_MODE" <<'PY'
+python3 - "$EVIDENCE_DIR/rebaseline.json" "$CURRENT_SHA" "$CHECKED_OUT_SHA" "$PR_MERGE_SHA" "$CANONICAL_UPSTREAM_URL" "$UPSTREAM_SHA" "$PEFY_ONLY" "$UPSTREAM_ONLY" "$UPSTREAM_DRIFT_CLASS" "$DOWNSTREAM_DIVERGENCE_CLASS" "$REVIEW_CLASS" "$CURRENT_LICENSE_SHA256" "$UPSTREAM_LICENSE_SHA256" "$PEFY_NOTICES_DECLARED" "$UPSTREAM_NOTICES_DECLARED" "$PEFY_NOTICES_SHA256" "$UPSTREAM_NOTICES_SHA256" "$REPORT_ONLY" "$EVIDENCE_MODE" <<'PY'
 import datetime as dt
 import json
 import pathlib
@@ -202,28 +222,31 @@ out = pathlib.Path(sys.argv[1])
 payload = {
     "generated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
     "pefy_candidate_sha": sys.argv[2],
-    "canonical_upstream_url": sys.argv[3],
+    "pefy_candidate_head_sha": sys.argv[2],
+    "checked_out_sha": sys.argv[3],
+    "pull_request_merge_sha": sys.argv[4] or None,
+    "canonical_upstream_url": sys.argv[5],
     "canonical_source_verified": True,
-    "upstream_sha": sys.argv[4],
-    "pefy_only_commits": int(sys.argv[5]),
-    "upstream_only_commits": int(sys.argv[6]),
-    "upstream_drift_class": sys.argv[7],
-    "downstream_divergence_class": sys.argv[8],
-    "review_class": sys.argv[9],
+    "upstream_sha": sys.argv[6],
+    "pefy_only_commits": int(sys.argv[7]),
+    "upstream_only_commits": int(sys.argv[8]),
+    "upstream_drift_class": sys.argv[9],
+    "downstream_divergence_class": sys.argv[10],
+    "review_class": sys.argv[11],
     "license": {
         "spdx": "MIT",
         "pefy_text_verified": True,
         "upstream_text_verified": True,
-        "pefy_sha256": sys.argv[10],
-        "upstream_sha256": sys.argv[11],
-        "pefy_third_party_notices_declared": sys.argv[12] == "true",
-        "upstream_third_party_notices_declared": sys.argv[13] == "true",
-        "pefy_third_party_notices_sha256": sys.argv[14] or None,
-        "upstream_third_party_notices_sha256": sys.argv[15] or None,
+        "pefy_sha256": sys.argv[12],
+        "upstream_sha256": sys.argv[13],
+        "pefy_third_party_notices_declared": sys.argv[14] == "true",
+        "upstream_third_party_notices_declared": sys.argv[15] == "true",
+        "pefy_third_party_notices_sha256": sys.argv[16] or None,
+        "upstream_third_party_notices_sha256": sys.argv[17] or None,
     },
     "automatic_sync_performed": False,
-    "report_only": sys.argv[16] == "1",
-    "evidence_mode": sys.argv[17],
+    "report_only": sys.argv[18] == "1",
+    "evidence_mode": sys.argv[19],
 }
 out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 PY
