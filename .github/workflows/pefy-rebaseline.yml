@@ -50,11 +50,19 @@ jobs:
               raise SystemExit("Canonical upstream source was not verified")
           if data.get("canonical_upstream_url") != "https://github.com/openclaw/openclaw.git":
               raise SystemExit("Unexpected upstream source identity")
+
           license_data = data.get("license", {})
-          if license_data.get("spdx") != "MIT" or license_data.get("text_verified") is not True:
-              raise SystemExit("Approved MIT license text evidence missing")
-          if license_data.get("pefy_equals_upstream") is not True:
-              raise SystemExit("PEFY and upstream license texts differ")
+          if license_data.get("spdx") != "MIT":
+              raise SystemExit("Expected repository-level SPDX MIT evidence")
+          if license_data.get("pefy_text_verified") is not True:
+              raise SystemExit("PEFY MIT body was not verified")
+          if license_data.get("upstream_text_verified") is not True:
+              raise SystemExit("Canonical upstream MIT body was not verified")
+          if license_data.get("pefy_third_party_notices_declared") and not license_data.get("pefy_third_party_notices_sha256"):
+              raise SystemExit("PEFY declares third-party notices without notice-file hash evidence")
+          if license_data.get("upstream_third_party_notices_declared") and not license_data.get("upstream_third_party_notices_sha256"):
+              raise SystemExit("Upstream declares third-party notices without notice-file hash evidence")
+
           if data.get("report_only") is not True:
               raise SystemExit("This workflow must remain report-only")
           if data.get("evidence_mode") != "NON_QUALIFYING_EVIDENCE_ONLY":
@@ -64,6 +72,7 @@ jobs:
               data["upstream_drift_class"],
               data["downstream_divergence_class"],
               data["review_class"],
+              "upstream_notices=", license_data.get("upstream_third_party_notices_declared"),
           )
           PY
 
