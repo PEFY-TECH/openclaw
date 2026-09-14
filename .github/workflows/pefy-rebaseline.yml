@@ -1,4 +1,5 @@
-name: PEFY Sovereign Rebaseline
+name: PEFY Rebaseline Evidence (NON-QUALIFYING)
+run-name: PEFY evidence only — never a production qualification
 
 on:
   pull_request:
@@ -18,7 +19,8 @@ permissions:
   contents: read
 
 jobs:
-  governance-rebaseline:
+  evidence-only-non-qualifying:
+    name: Evidence only (NON-QUALIFYING)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PEFY candidate with history
@@ -29,12 +31,12 @@ jobs:
       - name: Validate rebaseline script syntax
         run: bash -n scripts/pefy-runtime-rebaseline.sh
 
-      - name: Measure canonical upstream drift without syncing
+      - name: Measure canonical upstream/downstream drift without syncing
         env:
           PEFY_REBASELINE_REPORT_ONLY: "1"
         run: bash scripts/pefy-runtime-rebaseline.sh
 
-      - name: Assert no automatic upstream mutation occurred
+      - name: Assert evidence is explicitly non-qualifying and immutable
         run: |
           test -f artifacts/pefy-openclaw-rebaseline/rebaseline.json
           python - <<'PY'
@@ -44,18 +46,30 @@ jobs:
           data = json.loads(Path("artifacts/pefy-openclaw-rebaseline/rebaseline.json").read_text())
           if data.get("automatic_sync_performed") is not False:
               raise SystemExit("Automatic upstream mutation must remain false")
-          if data.get("license", {}).get("spdx") != "MIT":
-              raise SystemExit("Expected MIT canonical license evidence")
+          if data.get("canonical_source_verified") is not True:
+              raise SystemExit("Canonical upstream source was not verified")
+          if data.get("canonical_upstream_url") != "https://github.com/openclaw/openclaw.git":
+              raise SystemExit("Unexpected upstream source identity")
+          license_data = data.get("license", {})
+          if license_data.get("spdx") != "MIT" or license_data.get("text_verified") is not True:
+              raise SystemExit("Approved MIT license text evidence missing")
+          if license_data.get("pefy_equals_upstream") is not True:
+              raise SystemExit("PEFY and upstream license texts differ")
+          if data.get("report_only") is not True:
+              raise SystemExit("This workflow must remain report-only")
+          if data.get("evidence_mode") != "NON_QUALIFYING_EVIDENCE_ONLY":
+              raise SystemExit("Evidence-only workflow was mislabeled as qualifying")
           print(
-              "PEFY runtime governance evidence:",
-              data["drift_class"],
-              "upstream_only=", data["upstream_only_commits"],
+              "PEFY non-qualifying governance evidence:",
+              data["upstream_drift_class"],
+              data["downstream_divergence_class"],
+              data["review_class"],
           )
           PY
 
-      - name: Upload rebaseline evidence
+      - name: Upload non-qualifying rebaseline evidence
         uses: actions/upload-artifact@v4
         with:
-          name: pefy-openclaw-rebaseline
+          name: pefy-openclaw-rebaseline-NON-QUALIFYING
           if-no-files-found: error
           path: artifacts/pefy-openclaw-rebaseline/**
