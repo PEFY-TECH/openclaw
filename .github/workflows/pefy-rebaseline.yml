@@ -1,0 +1,104 @@
+name: PEFY Rebaseline Evidence (NON-QUALIFYING)
+run-name: PEFY evidence only — never a production qualification
+
+on:
+  pull_request:
+    paths:
+      - "scripts/pefy-runtime-rebaseline.sh"
+      - "docs/PEFY_RUNTIME_QUALIFICATION.md"
+      - ".github/workflows/pefy-rebaseline.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/pefy-runtime-rebaseline.sh"
+      - "docs/PEFY_RUNTIME_QUALIFICATION.md"
+      - ".github/workflows/pefy-rebaseline.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-only-non-qualifying:
+    name: Evidence only (NON-QUALIFYING)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout immutable PEFY candidate head with history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Validate rebaseline script syntax
+        run: bash -n scripts/pefy-runtime-rebaseline.sh
+
+      - name: Measure canonical upstream/downstream drift without syncing
+        env:
+          PEFY_REBASELINE_REPORT_ONLY: "1"
+          PEFY_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PEFY_PR_MERGE_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
+        run: bash scripts/pefy-runtime-rebaseline.sh
+
+      - name: Assert evidence is explicitly non-qualifying and candidate-bound
+        env:
+          EXPECTED_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_PR_MERGE_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
+        run: |
+          test -f artifacts/pefy-openclaw-rebaseline/rebaseline.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          data = json.loads(Path("artifacts/pefy-openclaw-rebaseline/rebaseline.json").read_text())
+          expected_head = os.environ["EXPECTED_CANDIDATE_HEAD_SHA"]
+          expected_merge = os.environ.get("EXPECTED_PR_MERGE_SHA") or None
+
+          if data.get("pefy_candidate_head_sha") != expected_head:
+              raise SystemExit("Evidence is not bound to the immutable PR/source candidate head")
+          if data.get("pefy_candidate_sha") != expected_head:
+              raise SystemExit("Legacy candidate field must equal the immutable source head")
+          if data.get("checked_out_sha") != expected_head:
+              raise SystemExit("Workflow did not checkout the immutable candidate head")
+          if data.get("pull_request_merge_sha") != expected_merge:
+              raise SystemExit("Synthetic PR merge SHA provenance does not match the workflow event")
+
+          if data.get("automatic_sync_performed") is not False:
+              raise SystemExit("Automatic upstream mutation must remain false")
+          if data.get("canonical_source_verified") is not True:
+              raise SystemExit("Canonical upstream source was not verified")
+          if data.get("canonical_upstream_url") != "https://github.com/openclaw/openclaw.git":
+              raise SystemExit("Unexpected upstream source identity")
+
+          license_data = data.get("license", {})
+          if license_data.get("spdx") != "MIT":
+              raise SystemExit("Expected repository-level SPDX MIT evidence")
+          if license_data.get("pefy_text_verified") is not True:
+              raise SystemExit("PEFY MIT body was not verified")
+          if license_data.get("upstream_text_verified") is not True:
+              raise SystemExit("Canonical upstream MIT body was not verified")
+          if license_data.get("pefy_third_party_notices_declared") and not license_data.get("pefy_third_party_notices_sha256"):
+              raise SystemExit("PEFY declares third-party notices without notice-file hash evidence")
+          if license_data.get("upstream_third_party_notices_declared") and not license_data.get("upstream_third_party_notices_sha256"):
+              raise SystemExit("Upstream declares third-party notices without notice-file hash evidence")
+
+          if data.get("report_only") is not True:
+              raise SystemExit("This workflow must remain report-only")
+          if data.get("evidence_mode") != "NON_QUALIFYING_EVIDENCE_ONLY":
+              raise SystemExit("Evidence-only workflow was mislabeled as qualifying")
+          print(
+              "PEFY non-qualifying governance evidence:",
+              "candidate=", expected_head,
+              data["upstream_drift_class"],
+              data["downstream_divergence_class"],
+              data["review_class"],
+              "upstream_notices=", license_data.get("upstream_third_party_notices_declared"),
+          )
+          PY
+
+      - name: Upload non-qualifying rebaseline evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pefy-openclaw-rebaseline-NON-QUALIFYING
+          if-no-files-found: error
+          path: artifacts/pefy-openclaw-rebaseline/**
