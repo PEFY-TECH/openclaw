@@ -8,11 +8,11 @@ At the review performed on 2026-09-13:
 
 - PEFY fork `main`: `316978700e24f7f14aab6b07fbbcaddd4dafe949` (2026-04-03);
 - canonical source: `openclaw/openclaw`;
-- declared license: MIT;
-- measured drift: 0 PEFY-only commits and 68,324 upstream-only commits;
-- drift classification: **U4 — major/unbounded production drift**;
-- GitHub Actions runs visible on the PEFY fork: none;
-- branch protection on PEFY `main`: not enabled at review time.
+- repository license: MIT;
+- initial measured divergence: 0 PEFY-only commits and 68,324 upstream-only commits;
+- overall review class: **R4 — major/unbounded rebaseline drift**;
+- GitHub Actions runs visible on the PEFY fork at the initial review: none;
+- branch protection on PEFY `main` was not enabled at the initial review.
 
 This baseline must therefore remain **not production-qualified** until the controlled rebaseline below is completed.
 
@@ -22,17 +22,21 @@ Do not bulk-sync, blindly rebase, automatically upgrade, or merge upstream solel
 
 The PEFY process is:
 
-`verify source -> pin candidate -> measure drift -> review provenance/license -> security/advisory review -> inspect breaking changes -> run CI/tests -> benchmark -> validate PEFY adapters/policies -> stage -> runtime smoke -> rollback proof -> approve`
+`verify canonical source -> pin candidate -> measure upstream and downstream divergence -> verify repository license text -> security/advisory review -> inspect breaking changes -> run CI/tests -> benchmark -> validate PEFY adapters/policies -> stage -> runtime smoke -> rollback proof -> approve`
 
 ## Canonical source and license
 
-Canonical upstream is:
+The only canonical upstream accepted by the qualification script is:
 
 ```text
-https://github.com/openclaw/openclaw
+https://github.com/openclaw/openclaw.git
 ```
 
-The fork currently exposes an MIT `LICENSE`. Qualification must still review third-party dependencies and bundled assets independently; repository-level MIT licensing does not automatically qualify every transitive dependency or external service.
+A caller-provided non-canonical upstream is rejected. Evidence records the canonical source identity explicitly.
+
+Repository-level MIT evidence is also fail-closed: both the PEFY candidate and canonical upstream `LICENSE` files must match the approved standard MIT body and must be identical to one another before the script emits `spdx=MIT`. Hashes are generated with Python `hashlib` for Linux/macOS portability.
+
+This repository-level check does not qualify every transitive dependency, embedded asset or external service. Those remain separate supply-chain gates.
 
 ## Drift measurement
 
@@ -42,7 +46,7 @@ Run from a clean candidate checkout:
 bash scripts/pefy-runtime-rebaseline.sh
 ```
 
-For a reproducible review, pin the upstream SHA after the reviewer selects it:
+For a reproducible qualification review, pin the upstream SHA after the reviewer selects it:
 
 ```bash
 PEFY_EXPECTED_UPSTREAM_SHA="<reviewed-upstream-sha>" \
@@ -51,24 +55,42 @@ PEFY_EXPECTED_UPSTREAM_SHA="<reviewed-upstream-sha>" \
 
 The script:
 
-- fetches canonical upstream into a dedicated non-branch ref;
+- fetches only the canonical upstream into a dedicated non-branch ref;
 - never merges, rebases, resets or checks out upstream;
 - records PEFY-only and upstream-only commit counts;
-- classifies drift U0-U4;
-- confirms the expected MIT license marker;
-- records license hashes and candidate SHAs;
-- fails qualification for U4 drift;
+- classifies upstream drift as `U0-U4`;
+- classifies downstream divergence as `D0-D4`;
+- calculates an overall review class `R0-R4` using the more severe of the two dimensions;
+- verifies the standard MIT license body on both candidates and requires downstream/upstream equality;
+- records canonical source, license hashes and candidate SHAs;
+- fails normal qualification for `R4` drift;
 - writes non-secret evidence under `artifacts/pefy-openclaw-rebaseline/`.
 
-## U0-U4 interpretation
+### Evidence-only workflow
 
-| Class | Upstream-only commits | Default treatment |
+The GitHub workflow is deliberately named **`PEFY Rebaseline Evidence (NON-QUALIFYING)`**. It runs the script with:
+
+```text
+PEFY_REBASELINE_REPORT_ONLY=1
+```
+
+A green result from that workflow means only that evidence was generated correctly and without upstream mutation. It **must never** be used as a branch-protection or promotion check that implies runtime/code qualification. The uploaded artifact is also labeled `NON-QUALIFYING`.
+
+## U/D/R interpretation
+
+Each dimension uses the same magnitude bands:
+
+| Level | Commit-count range | Default treatment |
 | --- | ---: | --- |
-| U0 | 0 | parity; normal qualification |
-| U1 | 1-99 | focused change review |
-| U2 | 100-999 | structured compatibility/security review |
-| U3 | 1,000-9,999 | major rebaseline programme |
-| U4 | 10,000+ | freeze production promotion; controlled rebaseline required |
+| 0 | 0 | no divergence on that dimension |
+| 1 | 1-99 | focused change review |
+| 2 | 100-999 | structured compatibility/security review |
+| 3 | 1,000-9,999 | major rebaseline programme |
+| 4 | 10,000+ | freeze production promotion; controlled rebaseline required |
+
+`U#` represents upstream-only drift. `D#` represents PEFY/downstream-only divergence. `R#` is the overall review class and equals the more severe level of `U#` or `D#`.
+
+Therefore `U0` alone must not be described as parity when downstream divergence exists. True parity requires `U0 + D0`, which yields `R0`.
 
 Commit count is a drift signal, not a risk score by itself. A single security-critical change may be more important than thousands of low-impact commits.
 
@@ -112,10 +134,10 @@ Required categories include at least:
 - install smoke;
 - workflow sanity;
 - CodeQL/security scanning;
-- PEFY rebaseline gate;
+- a **qualifying** PEFY rebaseline/drift decision, separate from the non-qualifying evidence-only workflow;
 - package/container checks relevant to the selected deployment form.
 
-If GitHub Actions remains disabled or produces no run, the gate stays **BLOCKED**.
+If a required workflow is disabled, queued indefinitely, skipped without accepted rationale, or produces no run for the exact candidate, the gate stays **BLOCKED**.
 
 ## Benchmark gate
 
@@ -153,8 +175,8 @@ Only after code qualification, run on the real approved host:
 
 - **Registered:** repository known to PEFY.
 - **Rebaseline blocked:** source or drift requires review.
-- **Code qualified:** exact candidate passed controlled rebaseline + CI/security/benchmark gates.
+- **Code qualified:** exact candidate passed controlled rebaseline plus CI/security/benchmark gates.
 - **Runtime qualified:** exact candidate passed real-host controls.
 - **Live production active:** runtime-qualified candidate is deployed with smoke, monitoring and rollback evidence.
 
-The current fork remains **rebaseline blocked** until the U4 condition is resolved through the controlled process above.
+The current fork remains **rebaseline blocked** until the R4 condition is resolved through the controlled process above.
