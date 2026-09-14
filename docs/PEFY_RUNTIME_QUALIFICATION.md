@@ -22,7 +22,7 @@ Do not bulk-sync, blindly rebase, automatically upgrade, or merge upstream solel
 
 The PEFY process is:
 
-`verify canonical source -> pin candidate -> measure upstream and downstream divergence -> verify repository license text -> security/advisory review -> inspect breaking changes -> run CI/tests -> benchmark -> validate PEFY adapters/policies -> stage -> runtime smoke -> rollback proof -> approve`
+`verify canonical source -> pin candidate -> measure upstream and downstream divergence -> verify repository license text/notices -> security/advisory review -> inspect breaking changes -> run CI/tests -> benchmark -> validate PEFY adapters/policies -> stage -> runtime smoke -> rollback proof -> approve`
 
 ## Canonical source and license
 
@@ -34,7 +34,14 @@ https://github.com/openclaw/openclaw.git
 
 A caller-provided non-canonical upstream is rejected. Evidence records the canonical source identity explicitly.
 
-Repository-level MIT evidence is also fail-closed: both the PEFY candidate and canonical upstream `LICENSE` files must match the approved standard MIT body and must be identical to one another before the script emits `spdx=MIT`. Hashes are generated with Python `hashlib` for Linux/macOS portability.
+Repository-level MIT evidence is fail-closed on both sides. The script independently verifies that the PEFY candidate and canonical upstream use the approved SPDX MIT body while preserving legitimate copyright-holder/year differences. It permits only one explicitly recognized post-license pointer:
+
+```text
+Third-party notices for incorporated or adapted code are recorded in
+THIRD_PARTY_NOTICES.md.
+```
+
+When that pointer is present, the referenced `THIRD_PARTY_NOTICES.md` must exist, be non-empty, and its SHA-256 is captured in evidence. Any other text outside the accepted MIT structure fails the gate. SHA-256 evidence is generated with Python `hashlib` for Linux/macOS portability.
 
 This repository-level check does not qualify every transitive dependency, embedded asset or external service. Those remain separate supply-chain gates.
 
@@ -61,8 +68,9 @@ The script:
 - classifies upstream drift as `U0-U4`;
 - classifies downstream divergence as `D0-D4`;
 - calculates an overall review class `R0-R4` using the more severe of the two dimensions;
-- verifies the standard MIT license body on both candidates and requires downstream/upstream equality;
-- records canonical source, license hashes and candidate SHAs;
+- verifies the approved MIT body independently on both candidates;
+- verifies and hashes `THIRD_PARTY_NOTICES.md` whenever the approved pointer is present;
+- records canonical source, license/notices hashes and candidate SHAs;
 - fails normal qualification for `R4` drift;
 - writes non-secret evidence under `artifacts/pefy-openclaw-rebaseline/`.
 
