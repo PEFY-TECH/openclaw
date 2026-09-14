@@ -23,9 +23,10 @@ jobs:
     name: Evidence only (NON-QUALIFYING)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PEFY candidate with history
+      - name: Checkout immutable PEFY candidate head with history
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Validate rebaseline script syntax
@@ -34,16 +35,34 @@ jobs:
       - name: Measure canonical upstream/downstream drift without syncing
         env:
           PEFY_REBASELINE_REPORT_ONLY: "1"
+          PEFY_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PEFY_PR_MERGE_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
         run: bash scripts/pefy-runtime-rebaseline.sh
 
-      - name: Assert evidence is explicitly non-qualifying and immutable
+      - name: Assert evidence is explicitly non-qualifying and candidate-bound
+        env:
+          EXPECTED_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_PR_MERGE_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
         run: |
           test -f artifacts/pefy-openclaw-rebaseline/rebaseline.json
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           data = json.loads(Path("artifacts/pefy-openclaw-rebaseline/rebaseline.json").read_text())
+          expected_head = os.environ["EXPECTED_CANDIDATE_HEAD_SHA"]
+          expected_merge = os.environ.get("EXPECTED_PR_MERGE_SHA") or None
+
+          if data.get("pefy_candidate_head_sha") != expected_head:
+              raise SystemExit("Evidence is not bound to the immutable PR/source candidate head")
+          if data.get("pefy_candidate_sha") != expected_head:
+              raise SystemExit("Legacy candidate field must equal the immutable source head")
+          if data.get("checked_out_sha") != expected_head:
+              raise SystemExit("Workflow did not checkout the immutable candidate head")
+          if data.get("pull_request_merge_sha") != expected_merge:
+              raise SystemExit("Synthetic PR merge SHA provenance does not match the workflow event")
+
           if data.get("automatic_sync_performed") is not False:
               raise SystemExit("Automatic upstream mutation must remain false")
           if data.get("canonical_source_verified") is not True:
@@ -69,6 +88,7 @@ jobs:
               raise SystemExit("Evidence-only workflow was mislabeled as qualifying")
           print(
               "PEFY non-qualifying governance evidence:",
+              "candidate=", expected_head,
               data["upstream_drift_class"],
               data["downstream_divergence_class"],
               data["review_class"],
